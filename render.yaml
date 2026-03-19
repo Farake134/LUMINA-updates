@@ -2,9 +2,10 @@ services:
   - type: web
     name: lumina-updates
     env: python
-    pythonVersion: "3.11.0"
-    buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn server:app
+    buildCommand: pip install flask
+    startCommand: python server.py
     envVars:
       - key: ADMIN_KEY
         value: @Seurise2000
+      - key: PORT
+        value: 10000

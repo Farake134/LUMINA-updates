@@ -2,8 +2,9 @@ services:
   - type: web
     name: lumina-updates
     env: python
+    pythonVersion: "3.11.0"
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn server:app
     envVars:
       - key: ADMIN_KEY
-        value: LUCAS_ADMIN_SECRET_2024
+        value: Lucas2024Secret!

@@ -7,4 +7,4 @@ services:
     startCommand: gunicorn server:app
     envVars:
       - key: ADMIN_KEY
-        value: Lucas2024Secret!
+        value: @Seurise2000

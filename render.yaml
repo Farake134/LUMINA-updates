@@ -6,6 +6,6 @@ services:
     startCommand: python server.py
     envVars:
       - key: ADMIN_KEY
-        value: @Seurise2000
+        value: @Serise2000
       - key: PORT
         value: 10000

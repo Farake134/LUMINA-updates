@@ -54,6 +54,18 @@ def publish():
     })
     return jsonify({"ok": True, "version": _store["version"]})
 
+@app.route('/retirer', methods=['POST'])
+def retirer():
+    if request.headers.get("X-Admin-Key") != ADMIN_KEY:
+        abort(403)
+    # Remettre la version actuelle = version du .exe = pas de mise à jour
+    data = request.json or {}
+    _store["version"]      = data.get("version", _store["version"])
+    _store["download_url"] = ""
+    _store["notes"]        = ""
+    _store["obligatoire"]  = False
+    return jsonify({"ok": True, "message": f'Mise à jour retirée. Version actuelle : {_store["version"]}' })
+
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5001))
     app.run(host='0.0.0.0', port=port)

@@ -9,7 +9,7 @@ from datetime import datetime
 app = Flask(__name__)
 
 # ── CLÉS ──────────────────────────────────────────────────────────────────────
-ADMIN_KEY = os.environ.get("ADMIN_KEY", "Lucas2024Secret!")
+ADMIN_KEY = os.environ.get("ADMIN_KEY", "2024Secret!")
 GROQ_KEY  = os.environ.get("GROQ_KEY", "")   # Votre clé Groq pour les codes gratuits
 
 # ── STOCKAGE EN MÉMOIRE ───────────────────────────────────────────────────────

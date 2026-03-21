@@ -5,9 +5,5 @@ services:
     buildCommand: pip install flask
     startCommand: python server.py
     envVars:
-      - key: ADMIN_KEY
-        value: @Serise2000
-      - key: GROQ_KEY
-        value: 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
       - key: PORT
         value: 10000

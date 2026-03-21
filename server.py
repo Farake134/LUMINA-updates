@@ -18,7 +18,7 @@ GROQ_KEY  = os.environ.get("GROQ_KEY", "")   # Votre clé Groq pour les codes gr
 _users   = {}   # {email: {password_hash, username, created_at, api_key}}
 _codes   = {}   # {code: {used, used_by, created_at, note}}
 _version = {
-    "version":      "1.3.0",
+    "version":      "1.3.4",
     "download_url": "",
     "notes":        "Version initiale",
     "obligatoire":  False,

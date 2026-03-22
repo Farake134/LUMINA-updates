@@ -35,7 +35,7 @@ def save_json(path, data):
 def get_users():   return load_json(USERS_FILE, {})
 def get_codes():   return load_json(CODES_FILE, {})
 def get_version(): return load_json(VER_FILE, {
-    "version": "1.3.6", "download_url": "",
+    "version": "1.3.7", "download_url": "",
     "notes": "Version initiale", "obligatoire": False,
     "date": "2026-03-22"
 })

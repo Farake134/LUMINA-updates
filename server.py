@@ -1,53 +1,60 @@
 """
 server.py — L.U.M.I.N.A Backend
-Sauvegarde persistante dans des fichiers JSON.
+Base de données Supabase — données permanentes
 """
-import os, json, hashlib, secrets, string
+import os, json, hashlib, secrets, string, requests as req
 from flask import Flask, jsonify, request, abort
 from datetime import datetime
 
 app = Flask(__name__)
 
-ADMIN_KEY = os.environ.get("ADMIN_KEY", "")
-GROQ_KEY  = os.environ.get("GROQ_KEY", "")
+ADMIN_KEY    = os.environ.get("ADMIN_KEY", "")
+GROQ_KEY     = os.environ.get("GROQ_KEY", "")
+SUPA_URL     = os.environ.get("SUPA_URL", "")
+SUPA_KEY     = os.environ.get("SUPA_KEY", "")
 
-# ── CHEMINS FICHIERS ──────────────────────────────────────────────────────────
-DATA_DIR   = "/tmp/lumina_data"
-USERS_FILE = os.path.join(DATA_DIR, "users.json")
-CODES_FILE = os.path.join(DATA_DIR, "codes.json")
-VER_FILE   = os.path.join(DATA_DIR, "version.json")
+def supa_headers():
+    return {
+        "apikey":        SUPA_KEY,
+        "Authorization": "Bearer " + SUPA_KEY,
+        "Content-Type":  "application/json",
+        "Prefer":        "return=representation",
+    }
 
-os.makedirs(DATA_DIR, exist_ok=True)
+def supa_get(table, params=""):
+    r = req.get(SUPA_URL + "/rest/v1/" + table + params,
+                headers=supa_headers(), timeout=10)
+    return r.json() if r.status_code < 300 else []
 
-# ── CHARGEMENT / SAUVEGARDE ───────────────────────────────────────────────────
-def load_json(path, default):
-    if os.path.exists(path):
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except: pass
-    return default
+def supa_post(table, data):
+    r = req.post(SUPA_URL + "/rest/v1/" + table,
+                 headers=supa_headers(), json=data, timeout=10)
+    return r.status_code < 300
 
-def save_json(path, data):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+def supa_patch(table, match, data):
+    r = req.patch(SUPA_URL + "/rest/v1/" + table + "?" + match,
+                  headers=supa_headers(), json=data, timeout=10)
+    return r.status_code < 300
 
-def get_users():   return load_json(USERS_FILE, {})
-def get_codes():   return load_json(CODES_FILE, {})
-def get_version(): return load_json(VER_FILE, {
-    "version": "1.3.7", "download_url": "",
-    "notes": "Version initiale", "obligatoire": False,
-    "date": "2026-03-22"
-})
+def supa_delete(table, match):
+    r = req.delete(SUPA_URL + "/rest/v1/" + table + "?" + match,
+                   headers=supa_headers(), timeout=10)
+    return r.status_code < 300
 
-def save_users(d):   save_json(USERS_FILE, d)
-def save_codes(d):   save_json(CODES_FILE, d)
-def save_version(d): save_json(VER_FILE, d)
+def hash_pw(pw):
+    return hashlib.sha256(pw.encode()).hexdigest()
 
-# ── UTILS ─────────────────────────────────────────────────────────────────────
-def hash_pw(pw):   return hashlib.sha256(pw.encode()).hexdigest()
-def gen_code(n=8): return ''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(n))
-def is_admin(req): return req.headers.get("X-Admin-Key") == ADMIN_KEY and ADMIN_KEY
+def gen_code(n=8):
+    return ''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(n))
+
+def is_admin(r):
+    return r.headers.get("X-Admin-Key") == ADMIN_KEY and ADMIN_KEY
+
+def get_version():
+    rows = supa_get("version", "?id=eq.1")
+    if rows and isinstance(rows, list) and len(rows) > 0:
+        return rows[0]
+    return {"version": "1.3.7", "download_url": "", "notes": "", "obligatoire": False, "date": ""}
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -56,10 +63,11 @@ def is_admin(req): return req.headers.get("X-Admin-Key") == ADMIN_KEY and ADMIN_
 
 @app.route('/')
 def home():
-    users = get_users()
+    users = supa_get("users", "?select=email")
     ver   = get_version()
     return jsonify({"app": "L.U.M.I.N.A Server", "status": "online",
-                    "users": len(users), "version": ver["version"]})
+                    "users": len(users) if isinstance(users, list) else 0,
+                    "version": ver.get("version", "1.3.7")})
 
 
 @app.route('/register', methods=['POST'])
@@ -78,39 +86,42 @@ def register():
     if not username:
         return jsonify({"ok": False, "error": "Nom requis"}), 400
 
-    users = get_users()
-    if email in users:
+    # Vérifier si email existe déjà
+    existing = supa_get("users", "?email=eq." + email)
+    if isinstance(existing, list) and len(existing) > 0:
         return jsonify({"ok": False, "error": "Email déjà utilisé"}), 400
 
-    # Code ou clé API
-    final_key  = ""
-    code_used  = False
-    codes      = get_codes()
+    final_key = ""
+    code_used = False
 
     if code:
-        if code not in codes:
+        rows = supa_get("codes", "?code=eq." + code)
+        if not isinstance(rows, list) or len(rows) == 0:
             return jsonify({"ok": False, "error": "Code invalide"}), 400
-        if codes[code]["used"]:
+        if rows[0]["used"]:
             return jsonify({"ok": False, "error": "Code déjà utilisé"}), 400
         final_key = GROQ_KEY
-        codes[code]["used"]    = True
-        codes[code]["used_by"] = email
-        codes[code]["used_at"] = datetime.now().isoformat()
-        save_codes(codes)
+        supa_patch("codes", "code=eq." + code, {
+            "used": True, "used_by": email,
+            "used_at": datetime.now().isoformat()
+        })
         code_used = True
     else:
         if not api_key or not api_key.startswith("gsk_"):
             return jsonify({"ok": False, "error": "Entrez un code d'accès ou une clé API valide"}), 400
         final_key = api_key
 
-    users[email] = {
+    ok = supa_post("users", {
+        "email":         email,
         "username":      username,
         "password_hash": hash_pw(password),
         "api_key":       final_key,
-        "created_at":    datetime.now().isoformat(),
         "code_used":     code if code_used else None,
-    }
-    save_users(users)
+    })
+
+    if not ok:
+        return jsonify({"ok": False, "error": "Erreur serveur"}), 500
+
     return jsonify({"ok": True, "message": "Compte créé", "username": username})
 
 
@@ -123,9 +134,11 @@ def login():
     if not email or not password:
         return jsonify({"ok": False, "error": "Email et mot de passe requis"}), 400
 
-    users = get_users()
-    user  = users.get(email)
-    if not user or user["password_hash"] != hash_pw(password):
+    rows = supa_get("users", "?email=eq." + email)
+    if not isinstance(rows, list) or len(rows) == 0:
+        return jsonify({"ok": False, "error": "Email ou mot de passe incorrect"}), 401
+    user = rows[0]
+    if user["password_hash"] != hash_pw(password):
         return jsonify({"ok": False, "error": "Email ou mot de passe incorrect"}), 401
 
     return jsonify({"ok": True, "username": user["username"], "api_key": user["api_key"]})
@@ -136,12 +149,12 @@ def check_update(current_version):
     ver = get_version()
     return jsonify({
         "current":      current_version,
-        "latest":       ver["version"],
-        "update":       current_version != ver["version"],
-        "obligatoire":  ver["obligatoire"],
-        "notes":        ver["notes"],
-        "download_url": ver["download_url"],
-        "date":         ver["date"],
+        "latest":       ver.get("version", "1.3.7"),
+        "update":       current_version != ver.get("version", "1.3.7"),
+        "obligatoire":  ver.get("obligatoire", False),
+        "notes":        ver.get("notes", ""),
+        "download_url": ver.get("download_url", ""),
+        "date":         ver.get("date", ""),
     })
 
 
@@ -155,49 +168,44 @@ def create_code():
     data  = request.json or {}
     count = min(data.get("count", 1), 50)
     note  = data.get("note", "")
-    codes = get_codes()
     new   = []
     for _ in range(count):
         c = gen_code()
-        while c in codes: c = gen_code()
-        codes[c] = {"used": False, "used_by": None, "used_at": None,
-                    "note": note, "created_at": datetime.now().isoformat()}
+        supa_post("codes", {"code": c, "used": False, "note": note,
+                            "created_at": datetime.now().isoformat()})
         new.append(c)
-    save_codes(codes)
     return jsonify({"ok": True, "codes": new, "count": len(new)})
 
 
 @app.route('/admin/codes/list')
 def list_codes():
     if not is_admin(request): abort(403)
-    codes = get_codes()
+    codes = supa_get("codes", "?order=created_at.desc")
+    if not isinstance(codes, list): codes = []
     return jsonify({"ok": True, "total": len(codes),
-                    "codes": [{"code": c, "used": d["used"],
-                               "used_by": d["used_by"], "note": d["note"]}
-                              for c, d in codes.items()]})
+                    "codes": [{"code": c["code"], "used": c["used"],
+                               "used_by": c.get("used_by"), "note": c.get("note","")}
+                              for c in codes]})
 
 
 @app.route('/admin/users/list')
 def list_users():
     if not is_admin(request): abort(403)
-    users = get_users()
+    users = supa_get("users", "?order=created_at.desc")
+    if not isinstance(users, list): users = []
     return jsonify({"ok": True, "total": len(users),
-                    "users": [{"email": e, "username": d["username"],
-                               "created_at": d["created_at"],
-                               "code_used": d["code_used"]}
-                              for e, d in users.items()]})
+                    "users": [{"email": u["email"], "username": u["username"],
+                               "created_at": u.get("created_at",""),
+                               "code_used": u.get("code_used")}
+                              for u in users]})
 
 
 @app.route('/admin/users/delete', methods=['POST'])
 def delete_user():
     if not is_admin(request): abort(403)
     email = (request.json or {}).get("email", "").lower()
-    users = get_users()
-    if email in users:
-        del users[email]
-        save_users(users)
-        return jsonify({"ok": True})
-    return jsonify({"ok": False, "error": "Introuvable"}), 404
+    ok = supa_delete("users", "email=eq." + email)
+    return jsonify({"ok": ok})
 
 
 @app.route('/admin/publish', methods=['POST'])
@@ -206,21 +214,24 @@ def publish():
     data = request.json or {}
     if "version" not in data or "download_url" not in data:
         return jsonify({"error": "version et download_url requis"}), 400
-    ver = get_version()
-    ver.update({"version": data["version"], "download_url": data["download_url"],
-                "notes": data.get("notes", ""), "obligatoire": data.get("obligatoire", False),
-                "date": datetime.now().strftime("%Y-%m-%d %H:%M")})
-    save_version(ver)
-    return jsonify({"ok": True, "version": ver["version"]})
+    supa_patch("version", "id=eq.1", {
+        "version":      data["version"],
+        "download_url": data["download_url"],
+        "notes":        data.get("notes", ""),
+        "obligatoire":  data.get("obligatoire", False),
+        "date":         datetime.now().strftime("%Y-%m-%d %H:%M"),
+    })
+    return jsonify({"ok": True, "version": data["version"]})
 
 
 @app.route('/admin/retirer', methods=['POST'])
 def retirer():
     if not is_admin(request): abort(403)
-    ver = get_version()
-    ver.update({"download_url": "", "notes": "", "obligatoire": False})
-    ver["version"] = (request.json or {}).get("version", ver["version"])
-    save_version(ver)
+    version = (request.json or {}).get("version", "")
+    supa_patch("version", "id=eq.1", {
+        "download_url": "", "notes": "", "obligatoire": False,
+        "version": version
+    })
     return jsonify({"ok": True})
 
 

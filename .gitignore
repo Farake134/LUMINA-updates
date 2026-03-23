@@ -1,0 +1,26 @@
+# Application cliente & admin (privés)
+lumina_app.py
+admin_publier.py
+LUMINA_installer.iss
+CREER_INSTALLATEUR.bat
+lumina.ico
+LUMINA.manifest
+
+# Clés et config
+firebase_key.json
+config.json
+
+# Mise à jour automatique
+*.new
+*_upd.bat
+
+# PyInstaller
+dist/
+build/
+*.spec
+installer_output/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo

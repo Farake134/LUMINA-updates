@@ -14,19 +14,21 @@ ADMIN_KEY = os.environ.get("ADMIN_KEY", "")
 GROQ_KEY  = os.environ.get("GROQ_KEY", "")
 
 # ── FIREBASE INIT ─────────────────────────────────────────────────────────────
-# La variable d'environnement FIREBASE_CREDENTIALS contient le JSON de la clé
-# de service Firebase (copié en une seule ligne).
-_cred_json = os.environ.get("FIREBASE_CREDENTIALS", "")
-if _cred_json:
-    import json as _json
-    _cred_dict = _json.loads(_cred_json)
-    cred = credentials.Certificate(_cred_dict)
-else:
-    # Fallback : fichier local pour tests (ne pas commit ce fichier !)
-    cred = credentials.Certificate("firebase_key.json")
+import json as _json
 
-firebase_admin.initialize_app(cred)
-db = firestore.client()
+_cred_json = os.environ.get("FIREBASE_CREDENTIALS", "").strip()
+try:
+    if _cred_json:
+        _cred_dict = _json.loads(_cred_json)
+        cred = credentials.Certificate(_cred_dict)
+    else:
+        cred = credentials.Certificate("firebase_key.json")
+    firebase_admin.initialize_app(cred)
+    db = firestore.client()
+except Exception as _e:
+    import sys
+    print("FIREBASE INIT ERROR:", _e, flush=True)
+    sys.exit(1)
 
 # ── COLLECTIONS FIRESTORE ─────────────────────────────────────────────────────
 # db.collection("users")   → un document par email
@@ -60,9 +62,11 @@ def get_version():
 
 @app.route('/')
 def home():
-    users = db.collection("users").count().get()
-    ver   = get_version()
-    nb    = users[0][0].value if users else 0
+    try:
+        nb  = len(list(db.collection("users").stream()))
+    except:
+        nb  = 0
+    ver = get_version()
     return jsonify({"app": "L.U.M.I.N.A Server", "status": "online",
                     "users": nb, "version": ver["version"]})
 

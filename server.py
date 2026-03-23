@@ -1,60 +1,57 @@
 """
 server.py — L.U.M.I.N.A Backend
-Base de données Supabase — données permanentes
+Données persistantes dans Firebase Firestore.
 """
-import os, json, hashlib, secrets, string, requests as req
+import os, hashlib, secrets, string
 from flask import Flask, jsonify, request, abort
 from datetime import datetime
+import firebase_admin
+from firebase_admin import credentials, firestore
 
 app = Flask(__name__)
 
-ADMIN_KEY    = os.environ.get("ADMIN_KEY", "")
-GROQ_KEY     = os.environ.get("GROQ_KEY", "")
-SUPA_URL     = os.environ.get("SUPA_URL", "")
-SUPA_KEY     = os.environ.get("SUPA_KEY", "")
+ADMIN_KEY = os.environ.get("ADMIN_KEY", "")
+GROQ_KEY  = os.environ.get("GROQ_KEY", "")
 
-def supa_headers():
-    return {
-        "apikey":        SUPA_KEY,
-        "Authorization": "Bearer " + SUPA_KEY,
-        "Content-Type":  "application/json",
-        "Prefer":        "return=representation",
-    }
+# ── FIREBASE INIT ─────────────────────────────────────────────────────────────
+# La variable d'environnement FIREBASE_CREDENTIALS contient le JSON de la clé
+# de service Firebase (copié en une seule ligne).
+_cred_json = os.environ.get("FIREBASE_CREDENTIALS", "")
+if _cred_json:
+    import json as _json
+    _cred_dict = _json.loads(_cred_json)
+    cred = credentials.Certificate(_cred_dict)
+else:
+    # Fallback : fichier local pour tests (ne pas commit ce fichier !)
+    cred = credentials.Certificate("firebase_key.json")
 
-def supa_get(table, params=""):
-    r = req.get(SUPA_URL + "/rest/v1/" + table + params,
-                headers=supa_headers(), timeout=10)
-    return r.json() if r.status_code < 300 else []
+firebase_admin.initialize_app(cred)
+db = firestore.client()
 
-def supa_post(table, data):
-    r = req.post(SUPA_URL + "/rest/v1/" + table,
-                 headers=supa_headers(), json=data, timeout=10)
-    return r.status_code < 300
+# ── COLLECTIONS FIRESTORE ─────────────────────────────────────────────────────
+# db.collection("users")   → un document par email
+# db.collection("codes")   → un document par code
+# db.collection("meta")    → document "version" pour les mises à jour
 
-def supa_patch(table, match, data):
-    r = req.patch(SUPA_URL + "/rest/v1/" + table + "?" + match,
-                  headers=supa_headers(), json=data, timeout=10)
-    return r.status_code < 300
-
-def supa_delete(table, match):
-    r = req.delete(SUPA_URL + "/rest/v1/" + table + "?" + match,
-                   headers=supa_headers(), timeout=10)
-    return r.status_code < 300
-
+# ── UTILS ─────────────────────────────────────────────────────────────────────
 def hash_pw(pw):
     return hashlib.sha256(pw.encode()).hexdigest()
 
 def gen_code(n=8):
     return ''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(n))
 
-def is_admin(r):
-    return r.headers.get("X-Admin-Key") == ADMIN_KEY and ADMIN_KEY
+def is_admin(req):
+    return req.headers.get("X-Admin-Key") == ADMIN_KEY and ADMIN_KEY
 
 def get_version():
-    rows = supa_get("version", "?id=eq.1")
-    if rows and isinstance(rows, list) and len(rows) > 0:
-        return rows[0]
-    return {"version": "1.3.7", "download_url": "", "notes": "", "obligatoire": False, "date": ""}
+    doc = db.collection("meta").document("version").get()
+    if doc.exists:
+        return doc.to_dict()
+    return {
+        "version": "1.3.7", "download_url": "",
+        "notes": "Version initiale", "obligatoire": False,
+        "date": datetime.now().strftime("%Y-%m-%d")
+    }
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -63,11 +60,11 @@ def get_version():
 
 @app.route('/')
 def home():
-    users = supa_get("users", "?select=email")
+    users = db.collection("users").count().get()
     ver   = get_version()
+    nb    = users[0][0].value if users else 0
     return jsonify({"app": "L.U.M.I.N.A Server", "status": "online",
-                    "users": len(users) if isinstance(users, list) else 0,
-                    "version": ver.get("version", "1.3.7")})
+                    "users": nb, "version": ver["version"]})
 
 
 @app.route('/register', methods=['POST'])
@@ -86,42 +83,44 @@ def register():
     if not username:
         return jsonify({"ok": False, "error": "Nom requis"}), 400
 
-    # Vérifier si email existe déjà
-    existing = supa_get("users", "?email=eq." + email)
-    if isinstance(existing, list) and len(existing) > 0:
+    # Vérifier si l'email existe déjà
+    user_ref = db.collection("users").document(email)
+    if user_ref.get().exists:
         return jsonify({"ok": False, "error": "Email déjà utilisé"}), 400
 
+    # Code ou clé API
     final_key = ""
     code_used = False
 
     if code:
-        rows = supa_get("codes", "?code=eq." + code)
-        if not isinstance(rows, list) or len(rows) == 0:
+        code_ref = db.collection("codes").document(code)
+        code_doc = code_ref.get()
+        if not code_doc.exists:
             return jsonify({"ok": False, "error": "Code invalide"}), 400
-        if rows[0]["used"]:
+        code_data = code_doc.to_dict()
+        if code_data.get("used"):
             return jsonify({"ok": False, "error": "Code déjà utilisé"}), 400
-        final_key = GROQ_KEY
-        supa_patch("codes", "code=eq." + code, {
-            "used": True, "used_by": email,
+        # Marquer le code comme utilisé
+        code_ref.update({
+            "used":    True,
+            "used_by": email,
             "used_at": datetime.now().isoformat()
         })
+        final_key = GROQ_KEY
         code_used = True
     else:
         if not api_key or not api_key.startswith("gsk_"):
             return jsonify({"ok": False, "error": "Entrez un code d'accès ou une clé API valide"}), 400
         final_key = api_key
 
-    ok = supa_post("users", {
-        "email":         email,
+    # Créer l'utilisateur dans Firestore
+    user_ref.set({
         "username":      username,
         "password_hash": hash_pw(password),
         "api_key":       final_key,
+        "created_at":    datetime.now().isoformat(),
         "code_used":     code if code_used else None,
     })
-
-    if not ok:
-        return jsonify({"ok": False, "error": "Erreur serveur"}), 500
-
     return jsonify({"ok": True, "message": "Compte créé", "username": username})
 
 
@@ -134,10 +133,11 @@ def login():
     if not email or not password:
         return jsonify({"ok": False, "error": "Email et mot de passe requis"}), 400
 
-    rows = supa_get("users", "?email=eq." + email)
-    if not isinstance(rows, list) or len(rows) == 0:
+    doc = db.collection("users").document(email).get()
+    if not doc.exists:
         return jsonify({"ok": False, "error": "Email ou mot de passe incorrect"}), 401
-    user = rows[0]
+
+    user = doc.to_dict()
     if user["password_hash"] != hash_pw(password):
         return jsonify({"ok": False, "error": "Email ou mot de passe incorrect"}), 401
 
@@ -149,8 +149,8 @@ def check_update(current_version):
     ver = get_version()
     return jsonify({
         "current":      current_version,
-        "latest":       ver.get("version", "1.3.7"),
-        "update":       current_version != ver.get("version", "1.3.7"),
+        "latest":       ver["version"],
+        "update":       current_version != ver["version"],
         "obligatoire":  ver.get("obligatoire", False),
         "notes":        ver.get("notes", ""),
         "download_url": ver.get("download_url", ""),
@@ -170,9 +170,17 @@ def create_code():
     note  = data.get("note", "")
     new   = []
     for _ in range(count):
+        # Générer un code unique
         c = gen_code()
-        supa_post("codes", {"code": c, "used": False, "note": note,
-                            "created_at": datetime.now().isoformat()})
+        while db.collection("codes").document(c).get().exists:
+            c = gen_code()
+        db.collection("codes").document(c).set({
+            "used":       False,
+            "used_by":    None,
+            "used_at":    None,
+            "note":       note,
+            "created_at": datetime.now().isoformat()
+        })
         new.append(c)
     return jsonify({"ok": True, "codes": new, "count": len(new)})
 
@@ -180,32 +188,44 @@ def create_code():
 @app.route('/admin/codes/list')
 def list_codes():
     if not is_admin(request): abort(403)
-    codes = supa_get("codes", "?order=created_at.desc")
-    if not isinstance(codes, list): codes = []
-    return jsonify({"ok": True, "total": len(codes),
-                    "codes": [{"code": c["code"], "used": c["used"],
-                               "used_by": c.get("used_by"), "note": c.get("note","")}
-                              for c in codes]})
+    docs  = db.collection("codes").stream()
+    codes = []
+    for doc in docs:
+        d = doc.to_dict()
+        codes.append({
+            "code":    doc.id,
+            "used":    d.get("used", False),
+            "used_by": d.get("used_by"),
+            "note":    d.get("note", "")
+        })
+    return jsonify({"ok": True, "total": len(codes), "codes": codes})
 
 
 @app.route('/admin/users/list')
 def list_users():
     if not is_admin(request): abort(403)
-    users = supa_get("users", "?order=created_at.desc")
-    if not isinstance(users, list): users = []
-    return jsonify({"ok": True, "total": len(users),
-                    "users": [{"email": u["email"], "username": u["username"],
-                               "created_at": u.get("created_at",""),
-                               "code_used": u.get("code_used")}
-                              for u in users]})
+    docs  = db.collection("users").stream()
+    users = []
+    for doc in docs:
+        d = doc.to_dict()
+        users.append({
+            "email":      doc.id,
+            "username":   d.get("username", ""),
+            "created_at": d.get("created_at", ""),
+            "code_used":  d.get("code_used")
+        })
+    return jsonify({"ok": True, "total": len(users), "users": users})
 
 
 @app.route('/admin/users/delete', methods=['POST'])
 def delete_user():
     if not is_admin(request): abort(403)
     email = (request.json or {}).get("email", "").lower()
-    ok = supa_delete("users", "email=eq." + email)
-    return jsonify({"ok": ok})
+    ref   = db.collection("users").document(email)
+    if not ref.get().exists:
+        return jsonify({"ok": False, "error": "Introuvable"}), 404
+    ref.delete()
+    return jsonify({"ok": True})
 
 
 @app.route('/admin/publish', methods=['POST'])
@@ -214,12 +234,12 @@ def publish():
     data = request.json or {}
     if "version" not in data or "download_url" not in data:
         return jsonify({"error": "version et download_url requis"}), 400
-    supa_patch("version", "id=eq.1", {
+    db.collection("meta").document("version").set({
         "version":      data["version"],
         "download_url": data["download_url"],
         "notes":        data.get("notes", ""),
         "obligatoire":  data.get("obligatoire", False),
-        "date":         datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "date":         datetime.now().strftime("%Y-%m-%d %H:%M")
     })
     return jsonify({"ok": True, "version": data["version"]})
 
@@ -228,9 +248,11 @@ def publish():
 def retirer():
     if not is_admin(request): abort(403)
     version = (request.json or {}).get("version", "")
-    supa_patch("version", "id=eq.1", {
-        "download_url": "", "notes": "", "obligatoire": False,
-        "version": version
+    db.collection("meta").document("version").update({
+        "download_url": "",
+        "notes":        "",
+        "obligatoire":  False,
+        "version":      version
     })
     return jsonify({"ok": True})
 

@@ -145,6 +145,9 @@ def login():
     if user["password_hash"] != hash_pw(password):
         return jsonify({"ok": False, "error": "Email ou mot de passe incorrect"}), 401
 
+    if user.get("banned"):
+        return jsonify({"ok": False, "error": "Compte suspendu. Contactez l'administrateur."}), 403
+
     return jsonify({"ok": True, "username": user["username"], "api_key": user["api_key"]})
 
 
@@ -230,6 +233,58 @@ def delete_user():
         return jsonify({"ok": False, "error": "Introuvable"}), 404
     ref.delete()
     return jsonify({"ok": True})
+
+
+@app.route('/admin/users/ban', methods=['POST'])
+def ban_user():
+    if not is_admin(request): abort(403)
+    data   = request.json or {}
+    email  = data.get("email", "").lower()
+    banned = data.get("banned", True)
+    ref    = db.collection("users").document(email)
+    if not ref.get().exists:
+        return jsonify({"ok": False, "error": "Introuvable"}), 404
+    ref.update({"banned": banned})
+    return jsonify({"ok": True})
+
+
+@app.route('/admin/notif', methods=['GET'])
+def get_notif():
+    if not is_admin(request): abort(403)
+    doc = db.collection("meta").document("notif").get()
+    if doc.exists:
+        return jsonify({"ok": True, **doc.to_dict()})
+    return jsonify({"ok": True, "titre": "", "message": ""})
+
+
+@app.route('/admin/notif/set', methods=['POST'])
+def set_notif():
+    if not is_admin(request): abort(403)
+    data = request.json or {}
+    db.collection("meta").document("notif").set({
+        "titre":   data.get("titre", ""),
+        "message": data.get("message", ""),
+        "date":    datetime.now().strftime("%Y-%m-%d %H:%M")
+    })
+    return jsonify({"ok": True})
+
+
+@app.route('/admin/notif/clear', methods=['POST'])
+def clear_notif():
+    if not is_admin(request): abort(403)
+    db.collection("meta").document("notif").set({"titre": "", "message": "", "date": ""})
+    return jsonify({"ok": True})
+
+
+@app.route('/notif')
+def public_notif():
+    """Route publique — appelée par le client au démarrage."""
+    doc = db.collection("meta").document("notif").get()
+    if doc.exists:
+        d = doc.to_dict()
+        if d.get("titre"):
+            return jsonify({"ok": True, "titre": d["titre"], "message": d.get("message","")})
+    return jsonify({"ok": False})
 
 
 @app.route('/admin/publish', methods=['POST'])

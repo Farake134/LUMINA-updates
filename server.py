@@ -340,11 +340,6 @@ def sync_download():
     return jsonify({"ok": True, "conversations": convs})
 
 
-if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5001))
-    app.run(host='0.0.0.0', port=port)
-
-
 @app.route('/admin/publish', methods=['POST'])
 def publish():
     if not is_admin(request): abort(403)
@@ -399,3 +394,7 @@ def start_server():
     if not is_admin(request): abort(403)
     db.collection("meta").document("status").set({"online": True})
     return jsonify({"ok": True})
+
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 5001))
+    app.run(host='0.0.0.0', port=port)

@@ -287,33 +287,51 @@ def public_notif():
     return jsonify({"ok": False})
 
 
-@app.route('/admin/publish', methods=['POST'])
-def publish():
-    if not is_admin(request): abort(403)
-    data = request.json or {}
-    if "version" not in data or "download_url" not in data:
-        return jsonify({"error": "version et download_url requis"}), 400
-    db.collection("meta").document("version").set({
-        "version":      data["version"],
-        "download_url": data["download_url"],
-        "notes":        data.get("notes", ""),
-        "obligatoire":  data.get("obligatoire", False),
-        "date":         datetime.now().strftime("%Y-%m-%d %H:%M")
-    })
-    return jsonify({"ok": True, "version": data["version"]})
-
-
-@app.route('/admin/retirer', methods=['POST'])
-def retirer():
-    if not is_admin(request): abort(403)
-    version = (request.json or {}).get("version", "")
-    db.collection("meta").document("version").update({
-        "download_url": "",
-        "notes":        "",
-        "obligatoire":  False,
-        "version":      version
-    })
+@app.route('/change_password', methods=['POST'])
+def change_password():
+    data     = request.json or {}
+    email    = data.get("email", "").strip().lower()
+    password = data.get("password", "").strip()
+    if not email or len(password) < 6:
+        return jsonify({"ok": False, "error": "Données invalides"}), 400
+    ref = db.collection("users").document(email)
+    if not ref.get().exists:
+        return jsonify({"ok": False, "error": "Utilisateur introuvable"}), 404
+    ref.update({"password_hash": hash_pw(password)})
     return jsonify({"ok": True})
+
+
+@app.route('/sync/upload', methods=['POST'])
+def sync_upload():
+    data   = request.json or {}
+    email  = data.get("email", "").strip().lower()
+    apikey = data.get("api_key", "").strip()
+    convs  = data.get("conversations", [])
+    ref = db.collection("users").document(email)
+    doc = ref.get()
+    if not doc.exists or doc.to_dict().get("api_key") != apikey:
+        return jsonify({"ok": False, "error": "Non autorisé"}), 403
+    db.collection("sync").document(email).set({
+        "conversations": convs,
+        "updated_at":    datetime.now().isoformat()
+    })
+    return jsonify({"ok": True, "count": len(convs)})
+
+
+@app.route('/sync/download', methods=['POST'])
+def sync_download():
+    data   = request.json or {}
+    email  = data.get("email", "").strip().lower()
+    apikey = data.get("api_key", "").strip()
+    ref = db.collection("users").document(email)
+    doc = ref.get()
+    if not doc.exists or doc.to_dict().get("api_key") != apikey:
+        return jsonify({"ok": False, "error": "Non autorisé"}), 403
+    sync_doc = db.collection("sync").document(email).get()
+    if not sync_doc.exists:
+        return jsonify({"ok": True, "conversations": []})
+    convs = sync_doc.to_dict().get("conversations", [])
+    return jsonify({"ok": True, "conversations": convs})
 
 
 if __name__ == '__main__':

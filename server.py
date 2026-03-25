@@ -337,3 +337,64 @@ def sync_download():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5001))
     app.run(host='0.0.0.0', port=port)
+
+
+@app.route('/admin/publish', methods=['POST'])
+def publish():
+    if not is_admin(request): abort(403)
+    data = request.json or {}
+    if "version" not in data or "download_url" not in data:
+        return jsonify({"error": "version et download_url requis"}), 400
+    db.collection("meta").document("version").set({
+        "version":      data["version"],
+        "download_url": data["download_url"],
+        "notes":        data.get("notes", ""),
+        "obligatoire":  data.get("obligatoire", False),
+        "date":         datetime.now().strftime("%Y-%m-%d %H:%M")
+    })
+    return jsonify({"ok": True, "version": data["version"]})
+
+
+@app.route('/admin/retirer', methods=['POST'])
+def retirer():
+    if not is_admin(request): abort(403)
+    version = (request.json or {}).get("version", "")
+    db.collection("meta").document("version").update({
+        "download_url": "",
+        "notes":        "",
+        "obligatoire":  False,
+        "version":      version
+    })
+    return jsonify({"ok": True})
+
+
+@app.route('/admin/stop', methods=['POST'])
+def stop_server():
+    if not is_admin(request): abort(403)
+    db.collection("meta").document("status").set({
+        "online":     False,
+        "message":    "Serveur arrêté par l'administrateur.",
+        "stopped_at": datetime.now().isoformat()
+    })
+    def _shutdown():
+        time.sleep(2)
+        os._exit(0)
+    import threading as _t
+    _t.Thread(target=_shutdown, daemon=True).start()
+    return jsonify({"ok": True})
+
+
+@app.route('/status')
+def server_status():
+    doc = db.collection("meta").document("status").get()
+    if doc.exists and not doc.to_dict().get("online", True):
+        return jsonify({"online": False,
+                        "message": doc.to_dict().get("message","Serveur arrêté.")})
+    return jsonify({"online": True})
+
+
+@app.route('/admin/start', methods=['POST'])
+def start_server():
+    if not is_admin(request): abort(403)
+    db.collection("meta").document("status").set({"online": True})
+    return jsonify({"ok": True})

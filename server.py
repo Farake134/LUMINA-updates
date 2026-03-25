@@ -2,7 +2,7 @@
 server.py — L.U.M.I.N.A Backend
 Données persistantes dans Firebase Firestore.
 """
-import os, hashlib, secrets, string
+import os, hashlib, secrets, string, time, threading
 from flask import Flask, jsonify, request, abort
 from datetime import datetime
 import firebase_admin
@@ -136,6 +136,12 @@ def login():
 
     if not email or not password:
         return jsonify({"ok": False, "error": "Email et mot de passe requis"}), 400
+
+    # Vérifier mode maintenance
+    status_doc = db.collection("meta").document("status").get()
+    if status_doc.exists and not status_doc.to_dict().get("online", True):
+        msg = status_doc.to_dict().get("message", "Serveur en maintenance.")
+        return jsonify({"ok": False, "error": msg}), 503
 
     doc = db.collection("users").document(email).get()
     if not doc.exists:
@@ -373,14 +379,9 @@ def stop_server():
     if not is_admin(request): abort(403)
     db.collection("meta").document("status").set({
         "online":     False,
-        "message":    "Serveur arrêté par l'administrateur.",
+        "message":    "Serveur en maintenance. Reessayez plus tard.",
         "stopped_at": datetime.now().isoformat()
     })
-    def _shutdown():
-        time.sleep(2)
-        os._exit(0)
-    import threading as _t
-    _t.Thread(target=_shutdown, daemon=True).start()
     return jsonify({"ok": True})
 
 
